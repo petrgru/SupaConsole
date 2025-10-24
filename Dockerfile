@@ -1,26 +1,29 @@
-# Builder: node 20
+# Builder: node 20 (con OpenSSL para Prisma)
 FROM node:20-bookworm-slim AS builder
 WORKDIR /app
+# OpenSSL para que Prisma detecte correctamente
+RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+# Instalar deps
 ENV NODE_ENV=development
-# Dependencias
 COPY package*.json ./
 RUN npm ci
 # Código
 COPY . .
-# Prisma (si aplica)
+# Generar Prisma client si aplica
 RUN npx prisma generate || true
-# Build Next
-RUN npm run build
+# Build Next en modo producción (sin afectar devDeps ya instaladas)
+RUN NODE_ENV=production npm run build
 
-# Runner con docker CLI + compose plugin
+# Runner con docker CLI + compose plugin + OpenSSL
 FROM debian:bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
-    PORT=3000
+    PORT=3000 \
+    NEXT_TELEMETRY_DISABLED=1
 
-# Instalar docker-ce-cli y plugin compose (sin daemon)
+# Docker CLI + compose y OpenSSL para Prisma runtime
 RUN apt-get update && apt-get install -y \
-    ca-certificates curl gnupg lsb-release jq \
+    ca-certificates curl gnupg lsb-release jq openssl \
  && install -m 0755 -d /etc/apt/keyrings \
  && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
  && chmod a+r /etc/apt/keyrings/docker.gpg \
