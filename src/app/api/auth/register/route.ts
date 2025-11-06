@@ -4,6 +4,17 @@ import { hashPassword, createSession } from '@/lib/auth'
 
 export async function POST(request: NextRequest) {
   try {
+    // Check if registration is open
+    const settings = await prisma.systemSettings.findFirst()
+    const registrationOpen = settings?.registrationOpen ?? true
+
+    if (!registrationOpen) {
+      return NextResponse.json(
+        { error: 'Registration is currently closed' },
+        { status: 403 }
+      )
+    }
+
     const { email, password, name } = await request.json()
 
     if (!email || !password) {

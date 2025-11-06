@@ -36,6 +36,8 @@ export default function DashboardPage() {
     runningContainers: number
     totalVolumeSize: string
   }>>({})
+  const [registrationOpen, setRegistrationOpen] = useState(true)
+  const [updatingRegistration, setUpdatingRegistration] = useState(false)
   const router = useRouter()
 
   const fetchProjects = async () => {
@@ -180,6 +182,42 @@ export default function DashboardPage() {
     }
   }
 
+  const fetchRegistrationStatus = async () => {
+    try {
+      const response = await fetch('/api/settings/registration')
+      if (response.ok) {
+        const data = await response.json()
+        setRegistrationOpen(data.registrationOpen)
+      }
+    } catch (error) {
+      console.error('Failed to fetch registration status:', error)
+    }
+  }
+
+  const toggleRegistration = async () => {
+    setUpdatingRegistration(true)
+    try {
+      const response = await fetch('/api/settings/registration', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          registrationOpen: !registrationOpen
+        })
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        setRegistrationOpen(data.registrationOpen)
+      }
+    } catch (error) {
+      console.error('Failed to toggle registration:', error)
+    } finally {
+      setUpdatingRegistration(false)
+    }
+  }
+
   const fetchProjectMemory = async (projectId: string) => {
     try {
       const response = await fetch(`/api/projects/${projectId}/memory/analyze`)
@@ -208,6 +246,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchProjects()
+    fetchRegistrationStatus()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -258,6 +297,33 @@ export default function DashboardPage() {
               height={150}
               className="object-contain"
             />
+            {/* Registration Lock Toggle */}
+            <button
+              onClick={toggleRegistration}
+              disabled={updatingRegistration}
+              className="ml-2 p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors relative group"
+              title={registrationOpen ? "Registration is open - click to close" : "Registration is closed - click to open"}
+            >
+              {updatingRegistration ? (
+                <svg className="w-5 h-5 animate-spin text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              ) : registrationOpen ? (
+                <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
+                </svg>
+              ) : (
+                <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+              )}
+              
+              {/* Tooltip */}
+              <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+                {registrationOpen ? "Close registration for new users" : "Registration closed for new users"}
+                <div className="absolute left-1/2 -translate-x-1/2 -top-1 w-2 h-2 bg-gray-900 rotate-45"></div>
+              </div>
+            </button>
           </div>
           <Button variant="outline" onClick={handleLogout}>
             <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">

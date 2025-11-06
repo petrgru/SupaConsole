@@ -95,3 +95,12 @@ model PasswordResetToken {
   
   @@map("password_reset_tokens")
 }
+
+model SystemSettings {
+  id                    String   @id @default(uuid())
+  registrationOpen      Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  
+  @@map("system_settings")
+}
