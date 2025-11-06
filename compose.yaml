@@ -15,6 +15,7 @@ services:
       - RUNNING_IN_DOCKER=true
       - HOST_PROJECT_PATH=/root/SupaConsole/supabase-projects
       - USE_HOST_MEMORY=true
+      - HOST_URL=http://192.168.22.144
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - supaconsole-data:/app/data

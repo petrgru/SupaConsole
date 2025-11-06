@@ -38,6 +38,7 @@ export default function DashboardPage() {
   }>>({})
   const [registrationOpen, setRegistrationOpen] = useState(true)
   const [updatingRegistration, setUpdatingRegistration] = useState(false)
+  const [hostUrl, setHostUrl] = useState('http://localhost')
   const router = useRouter()
 
   const fetchProjects = async () => {
@@ -116,19 +117,21 @@ export default function DashboardPage() {
         const data = await response.json()
         const envVars = data.envVars || {}
         
-        // Extract URLs from environment variables
+        // Extract URLs from environment variables using hostUrl from state
         const urls: Record<string, string> = {}
         if (envVars.KONG_HTTP_PORT) {
-          urls['API Gateway'] = `http://localhost:${envVars.KONG_HTTP_PORT}`
+          urls['API Gateway'] = `${hostUrl}:${envVars.KONG_HTTP_PORT}`
         }
         if (envVars.STUDIO_PORT) {
-          urls['Supabase Studio'] = `http://localhost:${envVars.KONG_HTTP_PORT || 8000}`
+          urls['Supabase Studio'] = `${hostUrl}:${envVars.KONG_HTTP_PORT || 8000}`
         }
         if (envVars.ANALYTICS_PORT) {
-          urls['Analytics (Logflare)'] = `http://localhost:${envVars.ANALYTICS_PORT}`
+          urls['Analytics (Logflare)'] = `${hostUrl}:${envVars.ANALYTICS_PORT}`
         }
         if (envVars.POSTGRES_PORT) {
-          urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@localhost:${envVars.POSTGRES_PORT}/postgres`
+          // Extract hostname from HOST_URL for database connection
+          const hostname = hostUrl.replace(/^https?:\/\//, '')
+          urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${hostname}:${envVars.POSTGRES_PORT}/postgres`
         }
         
         setProjectUrls(urls)
@@ -194,6 +197,18 @@ export default function DashboardPage() {
     }
   }
 
+  const fetchHostUrl = async () => {
+    try {
+      const response = await fetch('/api/settings/host-url')
+      if (response.ok) {
+        const data = await response.json()
+        setHostUrl(data.hostUrl)
+      }
+    } catch (error) {
+      console.error('Failed to fetch host URL:', error)
+    }
+  }
+
   const toggleRegistration = async () => {
     setUpdatingRegistration(true)
     try {
@@ -247,6 +262,7 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchProjects()
     fetchRegistrationStatus()
+    fetchHostUrl()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
