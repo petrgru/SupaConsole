@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { validateSession } from '@/lib/auth'
-import { deployProject } from '@/lib/project'
+import { getProjectStatus } from '@/lib/project'
 
 interface RouteContext {
   params: Promise<{
@@ -8,7 +8,7 @@ interface RouteContext {
   }>
 }
 
-export async function POST(request: NextRequest, { params }: RouteContext) {
+export async function GET(request: NextRequest, { params }: RouteContext) {
   const { id } = await params
   try {
     const internalKey = request.headers.get('x-internal-key') || ''
@@ -30,7 +30,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       )
     }
 
-    const result = await deployProject(id)
+    const result = await getProjectStatus(id)
 
     if (!result.success) {
       return NextResponse.json(
@@ -39,9 +39,9 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       )
     }
 
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ containers: result.containers })
   } catch (error) {
-    console.error('Deploy project error:', error)
+    console.error('Get project status error:', error)
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

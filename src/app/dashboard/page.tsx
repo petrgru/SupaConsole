@@ -26,6 +26,16 @@ export default function DashboardPage() {
   const [projectUrls, setProjectUrls] = useState<Record<string, string>>({})
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [systemMemory, setSystemMemory] = useState<{ total: number; used: number; usedPercent: number } | null>(null)
+  const [projectStats, setProjectStats] = useState<Record<string, {
+    totalMemoryUsed: number
+    systemTotalMemory: number
+    memoryUsagePercent: number
+    averageCpu: number
+    totalContainers: number
+    runningContainers: number
+    totalVolumeSize: string
+  }>>({})
   const router = useRouter()
 
   const fetchProjects = async () => {
@@ -33,6 +43,7 @@ export default function DashboardPage() {
       const response = await fetch('/api/projects')
       if (response.ok) {
         const data = await response.json()
+         console.log('Fetched projects:', data.projects.length)
         setProjects(data.projects)
         if (data.projects.length > 0) {
           setInitialized(true)
@@ -157,10 +168,75 @@ export default function DashboardPage() {
     setProjectUrls({})
   }
 
+  const fetchSystemMemory = async () => {
+    try {
+      const response = await fetch('/api/system/memory')
+      if (response.ok) {
+        const data = await response.json()
+        setSystemMemory(data)
+      }
+    } catch (error) {
+      console.error('Failed to fetch system memory:', error)
+    }
+  }
+
+  const fetchProjectMemory = async (projectId: string) => {
+    try {
+      const response = await fetch(`/api/projects/${projectId}/memory/analyze`)
+      if (response.ok) {
+        const data = await response.json()
+        console.log('Project stats for', projectId, ':', data.stats)
+        setProjectStats(prev => ({ 
+          ...prev, 
+          [projectId]: {
+            totalMemoryUsed: data.stats.totalMemoryUsed,
+            systemTotalMemory: data.stats.systemTotalMemory,
+            memoryUsagePercent: data.stats.memoryUsagePercent,
+            averageCpu: data.stats.averageCpu,
+            totalContainers: data.stats.totalContainers,
+            runningContainers: data.stats.runningContainers,
+            totalVolumeSize: data.stats.totalVolumeSize
+          }
+        }))
+      } else {
+        console.error('Failed to fetch project stats, status:', response.status)
+      }
+    } catch (error) {
+      console.error('Failed to fetch project stats:', error)
+    }
+  }
+
   useEffect(() => {
     fetchProjects()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (projects.length > 0) {
+      // Fetch stats immediately
+      fetchSystemMemory()
+      projects.forEach(project => {
+        fetchProjectMemory(project.id)
+      })
+      
+      // Refresh memory info every 5 minutes (300000ms)
+      const interval = setInterval(() => {
+        fetchSystemMemory()
+         // Re-fetch projects to get latest list
+         fetch('/api/projects')
+           .then(res => res.json())
+           .then(data => {
+             data.projects.forEach((project: Project) => {
+               fetchProjectMemory(project.id)
+             })
+           })
+           .catch(err => console.error('Failed to refresh project stats:', err))
+      }, 300000)
+      
+      return () => clearInterval(interval)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [projects])
 
   if (loading) {
     return (
@@ -250,6 +326,44 @@ export default function DashboardPage() {
               </Button>
             </div>
 
+            {/* System Memory Info */}
+            {systemMemory && (
+              <Card className="mb-6">
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+                    </svg>
+                    System Memory Usage
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span>Used: {systemMemory.used} MB / {systemMemory.total} MB</span>
+                      <span className={`font-semibold ${
+                        systemMemory.usedPercent > 80 ? 'text-red-500' : 
+                        systemMemory.usedPercent > 60 ? 'text-yellow-500' : 
+                        'text-green-500'
+                      }`}>
+                        {systemMemory.usedPercent}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
+                      <div 
+                        className={`h-3 rounded-full transition-all ${
+                          systemMemory.usedPercent > 80 ? 'bg-red-500' : 
+                          systemMemory.usedPercent > 60 ? 'bg-yellow-500' : 
+                          'bg-green-500'
+                        }`}
+                        style={{ width: `${systemMemory.usedPercent}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             {projects.length === 0 ? (
               <Card>
                 <CardContent className="flex flex-col items-center justify-center py-12 text-center">
@@ -270,32 +384,87 @@ export default function DashboardPage() {
                 {projects.map((project) => (
                   <Card key={project.id} className="hover:shadow-lg transition-shadow">
                     <CardHeader>
-                      <div className="flex justify-between items-start">
+                      <div className="flex items-start">
                         <CardTitle className="text-lg">{project.name}</CardTitle>
-                        <div className={`px-2 py-1 rounded-full text-xs ${
-                          project.status === 'active' ? 'bg-green-100 text-green-800' :
-                          project.status === 'paused' ? 'bg-yellow-100 text-yellow-800' :
-                          'bg-gray-100 text-gray-800'
-                        }`}>
-                          {project.status}
-                        </div>
                       </div>
                       {project.description && (
                         <CardDescription>{project.description}</CardDescription>
                       )}
+                      {/* Single status+metrics row under project name */}
+                      {projectStats[project.id] ? (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                          {/* Health status computed from containers */}
+                          {(() => {
+                            const s = projectStats[project.id]
+                            const healthy = s.runningContainers === s.totalContainers && s.totalContainers > 0
+                            const degraded = !healthy && s.runningContainers > 0
+                            const statusLabel = healthy ? 'Healthy' : degraded ? 'Degraded' : 'Down'
+                            const statusClass = healthy
+                              ? 'bg-green-100 text-green-800'
+                              : degraded
+                                ? 'bg-yellow-100 text-yellow-800'
+                                : 'bg-red-100 text-red-800'
+                            return (
+                              <span className={`px-2 py-1 rounded-full ${statusClass}`}>{statusLabel}</span>
+                            )
+                          })()}
+
+                          {/* Containers count */}
+                          <span className="px-2 py-1 rounded bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200">
+                            Containers: {projectStats[project.id].runningContainers}/{projectStats[project.id].totalContainers}
+                          </span>
+
+                          {/* Memory */}
+                          <span className="px-2 py-1 rounded bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-300 flex items-center gap-1" title="Memory Usage">
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+                            </svg>
+                            RAM: {Math.round(projectStats[project.id].totalMemoryUsed)} / {Math.round(projectStats[project.id].systemTotalMemory)} MB ({projectStats[project.id].memoryUsagePercent}%)
+                          </span>
+
+                          {/* CPU */}
+                          <span className="px-2 py-1 rounded bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-300 flex items-center gap-1" title="Average CPU">
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                            </svg>
+                            CPU: {projectStats[project.id].averageCpu.toFixed(1)}%
+                          </span>
+
+                          {/* Volumes Size */}
+                          <span className="px-2 py-1 rounded bg-purple-100 text-purple-800 dark:bg-purple-900/20 dark:text-purple-300 flex items-center gap-1" title="Volumes Directory Size">
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+                            </svg>
+                            Volumes: {projectStats[project.id].totalVolumeSize}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">Loading stats…</div>
+                      )}
                     </CardHeader>
                     <CardContent>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-muted-foreground">
-                          {project.slug}
-                        </span>
-                        <Button variant="outline" size="sm" onClick={() => handleManageProject(project)}>
-                          <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          </svg>
-                          Manage
-                        </Button>
+                      <div className="space-y-3">
+                        <div className="flex gap-2">
+                          <Button variant="outline" size="sm" onClick={() => handleManageProject(project)} className="flex-1">
+                            <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            </svg>
+                            Manage
+                          </Button>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={() => router.push(`/dashboard/projects/${project.id}/memory`)}
+                            className="flex-1"
+                            title="View detailed memory analysis"
+                          >
+                            <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                            </svg>
+                            Analysis
+                          </Button>
+                        </div>
                       </div>
                     </CardContent>
                   </Card>
@@ -353,11 +522,11 @@ export default function DashboardPage() {
                 </div>
               </div>
               
-              <div className="flex gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <Button
                   variant="outline"
                   onClick={() => router.push(`/dashboard/projects/${selectedProject.id}/configure`)}
-                  className="flex-1"
+                  className="flex items-center justify-center"
                 >
                   <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -366,9 +535,19 @@ export default function DashboardPage() {
                   Configure
                 </Button>
                 <Button
+                  variant="outline"
+                  onClick={() => router.push(`/dashboard/projects/${selectedProject.id}/memory`)}
+                  className="flex items-center justify-center"
+                >
+                  <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+                  </svg>
+                  Memory
+                </Button>
+                <Button
                   variant="destructive"
                   onClick={() => setShowDeleteConfirm(true)}
-                  className="flex-1"
+                  className="col-span-2 flex items-center justify-center"
                 >
                   <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1-1H8a1 1 0 00-1 1v3M4 7h16" />

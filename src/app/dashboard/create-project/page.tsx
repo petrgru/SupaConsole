@@ -13,6 +13,7 @@ export default function CreateProjectPage() {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [loading, setLoading] = useState(false)
+  const [deploying, setDeploying] = useState(false)
   const [error, setError] = useState('')
   const router = useRouter()
 
@@ -48,6 +49,21 @@ export default function CreateProjectPage() {
 
       if (response.ok) {
         const data = await response.json()
+        // Kick off deployment immediately so containers start right after creation
+        try {
+          setDeploying(true)
+          const deployResp = await fetch(`/api/projects/${data.project.id}/deploy`, {
+            method: 'POST',
+          })
+          // Even if deploy fails, continue to configuration page where user can retry
+          if (!deployResp.ok) {
+            // no-op: error will be handled on configure page if needed
+          }
+        } catch {
+          // Swallow deploy errors here; user can deploy from the Configure page
+        } finally {
+          setDeploying(false)
+        }
         // Redirect to project configuration page
         router.push(`/dashboard/projects/${data.project.id}/configure`)
       } else {
@@ -139,7 +155,7 @@ export default function CreateProjectPage() {
 
                 <div className="flex gap-4">
                   <Button type="submit" disabled={loading}>
-                    {loading ? 'Creating Project...' : 'Create Project'}
+                    {loading ? (deploying ? 'Starting containers…' : 'Creating Project...') : 'Create Project'}
                   </Button>
                   <Link href="/dashboard">
                     <Button type="button" variant="outline">

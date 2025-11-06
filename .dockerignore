@@ -1,2 +1,4 @@
 /node_modules
 .next/cache
+supabase-core
+supabase-projects

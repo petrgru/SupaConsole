@@ -1,0 +1,31 @@
+services:
+  supaconsole:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: supaconsole-supaconsole:latest
+    container_name: supaconsole
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_TELEMETRY_DISABLED=1
+      - DATABASE_URL=file:/app/data/dev.db
+      - RUNNING_IN_DOCKER=true
+      - HOST_PROJECT_PATH=/root/SupaConsole/supabase-projects
+      - USE_HOST_MEMORY=true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - supaconsole-data:/app/data
+      - ./supabase-core:/app/supabase-core
+      - ./supabase-projects:/app/supabase-projects
+      - /tmp/host-meminfo.txt:/host/meminfo:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/", "-o", "/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+volumes:
+  supaconsole-data:
+    driver: local

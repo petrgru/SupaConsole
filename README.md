@@ -195,6 +195,26 @@ The application manages Docker containers for each Supabase project:
 3. **Environment Setup**: Creates `.env` files from web interface
 4. **Container Management**: Runs `docker compose` commands automatically
 
+## 🧹 Cleanup všech projektů
+
+Pokud chcete kompletně uklidit všechny projekty vytvořené přes SupaConsole (zastavit a odstranit kontejnery, smazat volumes a sítě, vymazat adresáře projektů a vyčistit záznamy v lokální DB), můžete použít připravený skript:
+
+```bash
+# nespouští potvrzovací dialog
+scripts/cleanup-all-projects.sh -y
+
+# s potvrzením
+scripts/cleanup-all-projects.sh
+
+# volitelně: vlastní cesta k adresáři s projekty
+scripts/cleanup-all-projects.sh -y --projects-dir /abs/path/to/supabase-projects
+```
+
+Poznámky:
+- Skript očekává běžící kontejner `supaconsole` pro vyčištění lokální SQLite DB (jinak tento krok přeskočí).
+- Je idempotentní – pokud není co čistit, skončí bez chyby.
+- Výstup na konci zobrazí aktuální `docker ps` a stav adresáře `supabase-projects`.
+
 ## 📧 Email Configuration
 
 ### Gmail Setup

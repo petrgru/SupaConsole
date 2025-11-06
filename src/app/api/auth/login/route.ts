@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
 
     response.cookies.set('session', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: process.env.NODE_ENV === 'production' && !process.env.RUNNING_IN_DOCKER,
       sameSite: 'lax',
       maxAge: 24 * 60 * 60, // 24 hours
     })

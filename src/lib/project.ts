@@ -170,6 +170,13 @@ export async function createProject(name: string, userId: string, description?: 
       
     await execAsync(copyCommand)
     
+    // Update vector.yml with unique container name
+    const vectorConfigPath = path.join(projectDir, 'docker', 'volumes', 'logs', 'vector.yml')
+    let vectorConfig = await fs.readFile(vectorConfigPath, 'utf8')
+    // Replace the default vector container name with project-specific name
+    vectorConfig = vectorConfig.replace(/- supabase-vector/g, `- ${slug}-vector`)
+    await fs.writeFile(vectorConfigPath, vectorConfig)
+    
     // Customize docker-compose.yml with unique container names
     const dockerComposeFile = path.join(projectDir, 'docker', 'docker-compose.yml')
     let dockerComposeContent = await fs.readFile(dockerComposeFile, 'utf8')
@@ -205,6 +212,23 @@ export async function createProject(name: string, userId: string, description?: 
       `name: ${slug}`
     )
     
+    // Fix Docker-in-Docker path issues: Convert relative volume paths to absolute HOST paths
+    // When supaconsole runs docker compose via socket, Docker daemon uses HOST paths
+    const hostProjectPath = process.env.HOST_PROJECT_PATH || '/root/SupaConsole/supabase-projects'
+    const hostDockerDir = `${hostProjectPath}/${slug}/docker`
+    
+    // Replace all relative volume paths with absolute host paths
+    // Pattern: ./path/to/file:/container/path -> /absolute/host/path/to/file:/container/path
+    dockerComposeContent = dockerComposeContent.replace(
+      /(\s+- )\.\/([^:]+)(:[^:\n]+)/g,
+      `$1${hostDockerDir}/$2$3`
+    )
+    
+    // Replace static analytics port with dynamic port
+    dockerComposeContent = dockerComposeContent.replace(
+      /- 4000:4000/g,
+      '- ${ANALYTICS_PORT}:4000'
+    )
     
     // Write the modified docker-compose.yml back
     await fs.writeFile(dockerComposeFile, dockerComposeContent)
@@ -528,6 +552,79 @@ export async function deleteProject(projectId: string) {
     return { success: true }
   } catch (error) {
     console.error('Failed to delete project:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+  }
+}
+
+/**
+ * Get current status of project containers
+ */
+export async function getProjectStatus(projectId: string) {
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+    })
+
+    if (!project) {
+      return { success: false, error: 'Project not found' }
+    }
+
+    const projectDir = path.join(process.cwd(), 'supabase-projects', project.slug)
+    const dockerDir = path.join(projectDir, 'docker')
+
+    // Get container status using docker compose ps
+    const { stdout } = await execAsync('docker compose ps --format json', {
+      cwd: dockerDir,
+      timeout: 30000,
+    })
+
+    // Parse JSON output (one JSON object per line)
+    const lines = stdout.trim().split('\n').filter(line => line.trim())
+    const containers = lines.map(line => {
+      const container = JSON.parse(line)
+      return {
+        Name: container.Name || container.Service,
+        State: container.State,
+        Health: container.Health || 'N/A',
+        Service: container.Service
+      }
+    })
+
+    return { success: true, containers }
+  } catch (error) {
+    console.error('Failed to get project status:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+  }
+}
+
+/**
+ * Restart (reload) all project containers
+ */
+export async function reloadProject(projectId: string) {
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+    })
+
+    if (!project) {
+      return { success: false, error: 'Project not found' }
+    }
+
+    const projectDir = path.join(process.cwd(), 'supabase-projects', project.slug)
+    const dockerDir = path.join(projectDir, 'docker')
+
+    console.log(`Restarting containers for project ${project.slug}...`)
+    
+    // Restart all containers
+    await execAsync('docker compose restart', {
+      cwd: dockerDir,
+      timeout: 120000, // 2 minutes
+    })
+
+    console.log(`Project ${project.slug} restarted successfully`)
+    return { success: true }
+  } catch (error) {
+    console.error('Failed to restart project:', error)
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
   }
 }

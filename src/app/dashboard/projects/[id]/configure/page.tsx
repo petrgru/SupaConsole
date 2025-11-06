@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
 import { Button } from '@/components/ui/button'
@@ -9,13 +9,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-interface ConfigureProjectPageProps {
-  params: Promise<{
-    id: string
-  }>
-}
-
-export default function ConfigureProjectPage({ params }: ConfigureProjectPageProps) {
+export default function ConfigureProjectPage() {
+  const routeParams = useParams<{ id: string }>()
   const [envVars, setEnvVars] = useState({
     // Secrets
     POSTGRES_PASSWORD: 'your-super-secret-and-long-postgres-password',
@@ -103,6 +98,9 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
   })
   const [loading, setLoading] = useState(false)
   const [deploying, setDeploying] = useState(false)
+  const [waiting, setWaiting] = useState(false)
+  const [statusContainers, setStatusContainers] = useState<Array<{ Name: string; State: string; Health?: string | null }>>([])
+  const [restarting, setRestarting] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [projectId, setProjectId] = useState<string>('')
@@ -113,11 +111,45 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
     internetConnection: boolean;
   } | null>(null)
   const [checkingSystem, setCheckingSystem] = useState(false)
-  const router = useRouter()
+  const [hiddenKeys, setHiddenKeys] = useState<Record<string, boolean>>({})
+
+  // Keys considered sensitive (will be hidden by default)
+  const sensitiveRegex = /password|secret|key|token|pass|private/i
+
+  useEffect(() => {
+    // initialize hidden state for any envVar keys that look sensitive
+    const init: Record<string, boolean> = { ...hiddenKeys }
+    Object.keys(envVars).forEach(k => {
+      if (sensitiveRegex.test(k) && init[k] === undefined) init[k] = true
+    })
+    setHiddenKeys(init)
+  }, [projectId, envVars])
+
+  const toggleHidden = (key: string) => {
+    setHiddenKeys(prev => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  const revealAllInSection = (keys: string[]) => {
+    setHiddenKeys(prev => {
+      const updated = { ...prev }
+      keys.forEach(k => { updated[k] = false })
+      return updated
+    })
+  }
+
+  const hideAllInSection = (keys: string[]) => {
+    setHiddenKeys(prev => {
+      const updated = { ...prev }
+      keys.forEach(k => { updated[k] = true })
+      return updated
+    })
+  }
+  // Note: router not needed on this page currently
   
   useEffect(() => {
-    params.then(({ id }) => setProjectId(id))
-  }, [params])
+    const id = (routeParams?.id ?? '').toString()
+    setProjectId(id)
+  }, [routeParams])
 
   // Load existing environment variables when projectId is available
   useEffect(() => {
@@ -130,7 +162,8 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
           const data = await response.json()
           if (data.envVars && Object.keys(data.envVars).length > 0) {
             // Update state with existing environment variables
-            setEnvVars(prev => ({
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            setEnvVars((prev: any) => ({
               ...prev,
               ...data.envVars
             }))
@@ -157,7 +190,8 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
     const jwtSecret = generateSecureKey(64)
     const projectId = `project-${Date.now()}`
     
-    setEnvVars(prev => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setEnvVars((prev: any) => ({
       ...prev,
       POSTGRES_PASSWORD: generateSecureKey(32),
       JWT_SECRET: jwtSecret,
@@ -183,7 +217,8 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
   }
 
   const handleInputChange = (key: string, value: string) => {
-    setEnvVars(prev => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setEnvVars((prev: any) => ({
       ...prev,
       [key]: value
     }))
@@ -240,7 +275,35 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
     }
   }
 
+  const pollUntilReady = async (timeoutMs = 180000, intervalMs = 3000) => {
+    setWaiting(true)
+    const start = Date.now()
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const resp = await fetch(`/api/projects/${projectId}/status`, { cache: 'no-store' })
+        if (resp.ok) {
+          const data = await resp.json()
+          const containers = (data.containers || []) as Array<{ Name: string; State: string; Health?: string | null }>
+          setStatusContainers(containers)
+          if (containers.length > 0 && containers.every(c => c.State === 'running')) {
+            setWaiting(false)
+            return true
+          }
+        }
+      } catch {
+        // ignore and retry
+      }
+      await new Promise(r => setTimeout(r, intervalMs))
+    }
+    setWaiting(false)
+    return false
+  }
+
   const handleDeployProject = async () => {
+    if (!projectId) {
+      setError('Missing project id')
+      return
+    }
     setDeploying(true)
     setError('')
 
@@ -250,10 +313,13 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
       })
 
       if (response.ok) {
-        setSuccess('Project deployed successfully!')
-        setTimeout(() => {
-          router.push('/dashboard')
-        }, 2000)
+        setSuccess('Deployment started. Waiting for containers to become ready...')
+        const ready = await pollUntilReady()
+        if (ready) {
+          setSuccess('Project is up and running!')
+        } else {
+          setError('Containers did not become ready in time. You can check logs or try again.')
+        }
       } else {
         const data = await response.json()
         setError(data.error || 'Failed to deploy project')
@@ -262,6 +328,39 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
       setError('An error occurred during deployment.')
     } finally {
       setDeploying(false)
+    }
+  }
+
+  const handleRestartProject = async () => {
+    if (!projectId) {
+      setError('Missing project id')
+      return
+    }
+    setRestarting(true)
+    setError('')
+    setSuccess('')
+
+    try {
+      const response = await fetch(`/api/projects/${projectId}/restart`, {
+        method: 'POST',
+      })
+
+      if (response.ok) {
+        setSuccess('Restart triggered. Waiting for containers to become ready...')
+        const ready = await pollUntilReady(120000)
+        if (ready) {
+          setSuccess('Project restarted and is running!')
+        } else {
+          setError('Containers did not become ready after restart. Please check container logs.')
+        }
+      } else {
+        const data = await response.json()
+        setError(data.error || 'Failed to restart project')
+      }
+    } catch {
+      setError('An error occurred during restart.')
+    } finally {
+      setRestarting(false)
     }
   }
 
@@ -320,33 +419,91 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
                 <CardDescription>
                   These are the most critical security settings. Generate new secure values for production use.
                 </CardDescription>
-                <Button 
-                  onClick={handleGenerateSecrets}
-                  variant="outline"
-                  type="button"
-                >
-                  Generate New Secure Secrets
-                </Button>
+                <div className="flex gap-2">
+                  <Button 
+                    onClick={handleGenerateSecrets}
+                    variant="outline"
+                    type="button"
+                  >
+                    Generate New Secure Secrets
+                  </Button>
+                  <Button
+                    onClick={() => revealAllInSection(['POSTGRES_PASSWORD', 'JWT_SECRET', 'DASHBOARD_PASSWORD', 'SECRET_KEY_BASE', 'VAULT_ENC_KEY'])}
+                    variant="outline"
+                    type="button"
+                    size="sm"
+                  >
+                    Reveal All
+                  </Button>
+                  <Button
+                    onClick={() => hideAllInSection(['POSTGRES_PASSWORD', 'JWT_SECRET', 'DASHBOARD_PASSWORD', 'SECRET_KEY_BASE', 'VAULT_ENC_KEY'])}
+                    variant="outline"
+                    type="button"
+                    size="sm"
+                  >
+                    Hide All
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="postgres_password">PostgreSQL Password</Label>
-                    <Input
-                      id="postgres_password"
-                      type="password"
-                      value={envVars.POSTGRES_PASSWORD}
-                      onChange={createInputHandler('POSTGRES_PASSWORD')}
-                    />
+                    <div className="flex items-center">
+                      <Input
+                        id="postgres_password"
+                        type={hiddenKeys['POSTGRES_PASSWORD'] ? 'password' : 'text'}
+                        value={envVars.POSTGRES_PASSWORD}
+                        onChange={createInputHandler('POSTGRES_PASSWORD')}
+                      />
+                      <button
+                        type="button"
+                        className="ml-2 p-2 text-muted-foreground hover:text-foreground"
+                        onClick={() => toggleHidden('POSTGRES_PASSWORD')}
+                        title={hiddenKeys['POSTGRES_PASSWORD'] ? 'Show' : 'Hide'}
+                      >
+                        {hiddenKeys['POSTGRES_PASSWORD'] ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                            <line x1="1" y1="1" x2="23" y2="23"/>
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                          </svg>
+                        )}
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="jwt_secret">JWT Secret</Label>
-                    <Input
-                      id="jwt_secret"
-                      type="password"
-                      value={envVars.JWT_SECRET}
-                      onChange={createInputHandler('JWT_SECRET')}
-                    />
+                    <div className="flex items-center">
+                      <Input
+                        id="jwt_secret"
+                        type={hiddenKeys['JWT_SECRET'] ? 'password' : 'text'}
+                        value={envVars.JWT_SECRET}
+                        onChange={createInputHandler('JWT_SECRET')}
+                      />
+                      <button
+                        type="button"
+                        className="ml-2 p-2 text-muted-foreground hover:text-foreground"
+                        onClick={() => toggleHidden('JWT_SECRET')}
+                        title={hiddenKeys['JWT_SECRET'] ? 'Show' : 'Hide'}
+                      >
+                        {hiddenKeys['JWT_SECRET'] ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                            <line x1="1" y1="1" x2="23" y2="23"/>
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                          </svg>
+                        )}
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="dashboard_username">Dashboard Username</Label>
@@ -359,30 +516,90 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="dashboard_password">Dashboard Password</Label>
-                    <Input
-                      id="dashboard_password"
-                      type="password"
-                      value={envVars.DASHBOARD_PASSWORD}
-                      onChange={createInputHandler('DASHBOARD_PASSWORD')}
-                    />
+                    <div className="flex items-center">
+                      <Input
+                        id="dashboard_password"
+                        type={hiddenKeys['DASHBOARD_PASSWORD'] ? 'password' : 'text'}
+                        value={envVars.DASHBOARD_PASSWORD}
+                        onChange={createInputHandler('DASHBOARD_PASSWORD')}
+                      />
+                      <button
+                        type="button"
+                        className="ml-2 p-2 text-muted-foreground hover:text-foreground"
+                        onClick={() => toggleHidden('DASHBOARD_PASSWORD')}
+                        title={hiddenKeys['DASHBOARD_PASSWORD'] ? 'Show' : 'Hide'}
+                      >
+                        {hiddenKeys['DASHBOARD_PASSWORD'] ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                            <line x1="1" y1="1" x2="23" y2="23"/>
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                          </svg>
+                        )}
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="secret_key_base">Secret Key Base</Label>
-                    <Input
-                      id="secret_key_base"
-                      type="password"
-                      value={envVars.SECRET_KEY_BASE}
-                      onChange={createInputHandler('SECRET_KEY_BASE')}
-                    />
+                    <div className="flex items-center">
+                      <Input
+                        id="secret_key_base"
+                        type={hiddenKeys['SECRET_KEY_BASE'] ? 'password' : 'text'}
+                        value={envVars.SECRET_KEY_BASE}
+                        onChange={createInputHandler('SECRET_KEY_BASE')}
+                      />
+                      <button
+                        type="button"
+                        className="ml-2 p-2 text-muted-foreground hover:text-foreground"
+                        onClick={() => toggleHidden('SECRET_KEY_BASE')}
+                        title={hiddenKeys['SECRET_KEY_BASE'] ? 'Show' : 'Hide'}
+                      >
+                        {hiddenKeys['SECRET_KEY_BASE'] ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                            <line x1="1" y1="1" x2="23" y2="23"/>
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                          </svg>
+                        )}
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="vault_enc_key">Vault Encryption Key</Label>
-                    <Input
-                      id="vault_enc_key"
-                      type="password"
-                      value={envVars.VAULT_ENC_KEY}
-                      onChange={createInputHandler('VAULT_ENC_KEY')}
-                    />
+                    <div className="flex items-center">
+                      <Input
+                        id="vault_enc_key"
+                        type={hiddenKeys['VAULT_ENC_KEY'] ? 'password' : 'text'}
+                        value={envVars.VAULT_ENC_KEY}
+                        onChange={createInputHandler('VAULT_ENC_KEY')}
+                      />
+                      <button
+                        type="button"
+                        className="ml-2 p-2 text-muted-foreground hover:text-foreground"
+                        onClick={() => toggleHidden('VAULT_ENC_KEY')}
+                        title={hiddenKeys['VAULT_ENC_KEY'] ? 'Show' : 'Hide'}
+                      >
+                        {hiddenKeys['VAULT_ENC_KEY'] ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                            <line x1="1" y1="1" x2="23" y2="23"/>
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                          </svg>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -395,26 +612,84 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
                 <CardDescription>
                   JSON Web Token keys for authentication. The default keys are for demo purposes only.
                 </CardDescription>
+                <div className="flex gap-2 mt-2">
+                  <Button
+                    onClick={() => revealAllInSection(['ANON_KEY', 'SERVICE_ROLE_KEY'])}
+                    variant="outline"
+                    type="button"
+                    size="sm"
+                  >
+                    Reveal All
+                  </Button>
+                  <Button
+                    onClick={() => hideAllInSection(['ANON_KEY', 'SERVICE_ROLE_KEY'])}
+                    variant="outline"
+                    type="button"
+                    size="sm"
+                  >
+                    Hide All
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="anon_key">Anonymous Key (Public)</Label>
-                    <Input
-                      id="anon_key"
-                      type="text"
-                      value={envVars.ANON_KEY}
-                      onChange={createInputHandler('ANON_KEY')}
-                    />
+                    <div className="flex items-center">
+                      <Input
+                        id="anon_key"
+                        type={hiddenKeys['ANON_KEY'] ? 'password' : 'text'}
+                        value={envVars.ANON_KEY}
+                        onChange={createInputHandler('ANON_KEY')}
+                      />
+                      <button
+                        type="button"
+                        className="ml-2 p-2 text-muted-foreground hover:text-foreground"
+                        onClick={() => toggleHidden('ANON_KEY')}
+                        title={hiddenKeys['ANON_KEY'] ? 'Show' : 'Hide'}
+                      >
+                        {hiddenKeys['ANON_KEY'] ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                            <line x1="1" y1="1" x2="23" y2="23"/>
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                          </svg>
+                        )}
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="service_role_key">Service Role Key (Secret)</Label>
-                    <Input
-                      id="service_role_key"
-                      type="password"
-                      value={envVars.SERVICE_ROLE_KEY}
-                      onChange={createInputHandler('SERVICE_ROLE_KEY')}
-                    />
+                    <div className="flex items-center">
+                      <Input
+                        id="service_role_key"
+                        type={hiddenKeys['SERVICE_ROLE_KEY'] ? 'password' : 'text'}
+                        value={envVars.SERVICE_ROLE_KEY}
+                        onChange={createInputHandler('SERVICE_ROLE_KEY')}
+                      />
+                      <button
+                        type="button"
+                        className="ml-2 p-2 text-muted-foreground hover:text-foreground"
+                        onClick={() => toggleHidden('SERVICE_ROLE_KEY')}
+                        title={hiddenKeys['SERVICE_ROLE_KEY'] ? 'Show' : 'Hide'}
+                      >
+                        {hiddenKeys['SERVICE_ROLE_KEY'] ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                            <line x1="1" y1="1" x2="23" y2="23"/>
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                          </svg>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -518,6 +793,24 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
                 <CardDescription>
                   SMTP settings for authentication emails.
                 </CardDescription>
+                <div className="flex gap-2 mt-2">
+                  <Button
+                    onClick={() => revealAllInSection(['SMTP_PASS'])}
+                    variant="outline"
+                    type="button"
+                    size="sm"
+                  >
+                    Reveal All
+                  </Button>
+                  <Button
+                    onClick={() => hideAllInSection(['SMTP_PASS'])}
+                    variant="outline"
+                    type="button"
+                    size="sm"
+                  >
+                    Hide All
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -559,12 +852,32 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="smtp_pass">SMTP Password</Label>
-                    <Input
-                      id="smtp_pass"
-                      type="password"
-                      value={envVars.SMTP_PASS}
-                      onChange={createInputHandler('SMTP_PASS')}
-                    />
+                    <div className="flex items-center">
+                      <Input
+                        id="smtp_pass"
+                        type={hiddenKeys['SMTP_PASS'] ? 'password' : 'text'}
+                        value={envVars.SMTP_PASS}
+                        onChange={createInputHandler('SMTP_PASS')}
+                      />
+                      <button
+                        type="button"
+                        className="ml-2 p-2 text-muted-foreground hover:text-foreground"
+                        onClick={() => toggleHidden('SMTP_PASS')}
+                        title={hiddenKeys['SMTP_PASS'] ? 'Show' : 'Hide'}
+                      >
+                        {hiddenKeys['SMTP_PASS'] ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                            <line x1="1" y1="1" x2="23" y2="23"/>
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                            <circle cx="12" cy="12" r="3"/>
+                          </svg>
+                        )}
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="smtp_sender_name">SMTP Sender Name</Label>
@@ -722,8 +1035,28 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
                     </Button>
                     
                     <Button 
+                      onClick={handleRestartProject}
+                      disabled={restarting}
+                      variant="outline"
+                    >
+                      {restarting ? (
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-700 rounded-full animate-spin"></div>
+                          Restarting...
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                          Restart Stack
+                        </div>
+                      )}
+                    </Button>
+                    
+                    <Button 
                       onClick={handleDeployProject} 
-                      disabled={deploying || !success}
+                      disabled={deploying}
                     >
                       {deploying ? (
                         <div className="flex items-center gap-2">
@@ -740,6 +1073,40 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
                       )}
                     </Button>
                   </div>
+
+                  {/* Live status/polling output */}
+                  {(waiting || statusContainers.length > 0) && (
+                    <div className="mt-4 bg-card border rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="font-medium">Container status</h4>
+                        {waiting && (
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <div className="w-3 h-3 border-2 border-gray-300 border-t-gray-700 rounded-full animate-spin"></div>
+                            Waiting for containers to be running…
+                          </div>
+                        )}
+                      </div>
+                      {statusContainers.length > 0 ? (
+                        <div className="space-y-2 text-sm">
+                          <div className="text-muted-foreground">
+                            Running {statusContainers.filter((c: { State: string }) => c.State === 'running').length} / {statusContainers.length}
+                          </div>
+                          <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            {statusContainers.map((c: { Name: string; State: string; Health?: string | null }) => (
+                              <li key={c.Name} className="flex items-center justify-between rounded border px-2 py-1">
+                                <span className="font-mono truncate mr-2" title={c.Name}>{c.Name}</span>
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${c.State === 'running' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                                  {c.State}{c.Health ? ` (${c.Health})` : ''}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : (
+                        <div className="text-sm text-muted-foreground">No containers reported yet…</div>
+                      )}
+                    </div>
+                  )}
 
                   {systemChecks && (
                     <div className="bg-card border rounded-lg p-4">

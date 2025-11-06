@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { validateSession } from '@/lib/auth'
-import { deployProject } from '@/lib/project'
+import { reloadProject } from '@/lib/project'
 
 interface RouteContext {
   params: Promise<{
@@ -30,7 +30,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       )
     }
 
-    const result = await deployProject(id)
+    const result = await reloadProject(id)
 
     if (!result.success) {
       return NextResponse.json(
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
 
     return NextResponse.json({ success: true })
   } catch (error) {
-    console.error('Deploy project error:', error)
+    console.error('Restart project error:', error)
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
