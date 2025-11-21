@@ -83,15 +83,19 @@ async function main() {
 
   // Generate env
   const basePort = 8000 + (timestamp % 10000)
+  // Generate JWT secret first; sign tokens with HS256 using this secret
+  const jwtSecret = randomString(64)
+  const hostUrl = process.env.HOST_URL || `http://localhost`
   const env = {
     POSTGRES_PASSWORD: randomString(32),
-    JWT_SECRET: randomString(64),
-    ANON_KEY: fakeJWT('anon', timestamp),
-    SERVICE_ROLE_KEY: fakeJWT('service_role', timestamp),
+    JWT_SECRET: jwtSecret,
+    ANON_KEY: signJWT({ role: 'anon', iss: 'supabase', aud: 'authenticated', iat: Math.floor(timestamp/1000), exp: Math.floor(timestamp/1000) + 31536000 }, jwtSecret),
+    SERVICE_ROLE_KEY: signJWT({ role: 'service_role', iss: 'supabase', aud: 'authenticated', iat: Math.floor(timestamp/1000), exp: Math.floor(timestamp/1000) + 31536000 }, jwtSecret),
     DASHBOARD_USERNAME: 'supabase',
     DASHBOARD_PASSWORD: randomString(16),
     SECRET_KEY_BASE: randomString(64),
     VAULT_ENC_KEY: randomString(32),
+    PG_META_CRYPTO_KEY: randomString(32),
     POSTGRES_PORT: String(basePort + 2000),
     POOLER_PROXY_PORT_TRANSACTION: String(basePort + 3000),
     KONG_HTTP_PORT: String(basePort),
@@ -104,11 +108,11 @@ async function main() {
     POOLER_TENANT_ID: `project-${timestamp}`,
     POOLER_DB_POOL_SIZE: '5',
     PGRST_DB_SCHEMAS: 'public,storage,graphql_public',
-    SITE_URL: `http://localhost:${basePort}`,
+  SITE_URL: `${hostUrl}:${basePort}`,
     ADDITIONAL_REDIRECT_URLS: '',
     JWT_EXPIRY: '3600',
     DISABLE_SIGNUP: 'false',
-    API_EXTERNAL_URL: `http://localhost:${basePort}`,
+  API_EXTERNAL_URL: `${hostUrl}:${basePort}`,
     MAILER_URLPATHS_CONFIRMATION: '/auth/v1/verify',
     MAILER_URLPATHS_INVITE: '/auth/v1/verify',
     MAILER_URLPATHS_RECOVERY: '/auth/v1/verify',
@@ -126,8 +130,8 @@ async function main() {
     ENABLE_PHONE_AUTOCONFIRM: 'true',
     STUDIO_DEFAULT_ORGANIZATION: 'Default Organization',
     STUDIO_DEFAULT_PROJECT: 'Default Project',
-    STUDIO_PORT: String(basePort + 100),
-    SUPABASE_PUBLIC_URL: `http://localhost:${basePort}`,
+  STUDIO_PORT: String(basePort + 100),
+  SUPABASE_PUBLIC_URL: `${hostUrl}:${basePort}`,
     IMGPROXY_ENABLE_WEBP_DETECTION: 'true',
     OPENAI_API_KEY: '',
     FUNCTIONS_VERIFY_JWT: 'false',
@@ -164,11 +168,15 @@ async function main() {
 }
 
 function randomString(len) { return crypto.randomBytes(Math.ceil(len / 2)).toString('base64').replace(/[^A-Za-z0-9]/g, '').slice(0, len) }
-function fakeJWT(role, ts) {
-  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
-  const payload = Buffer.from(JSON.stringify({ role, iss: 'supabase', iat: Math.floor(ts/1000), exp: Math.floor(ts/1000) + 31536000 })).toString('base64url')
-  const signature = randomString(43)
-  return `${header}.${payload}.${signature}`
+function base64url(input) { return Buffer.from(input).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_') }
+function signJWT(payload, secret) {
+  const header = { alg: 'HS256', typ: 'JWT' }
+  const headerB64 = base64url(JSON.stringify(header))
+  const payloadB64 = base64url(JSON.stringify(payload))
+  const data = `${headerB64}.${payloadB64}`
+  const sig = crypto.createHmac('sha256', secret).update(data).digest()
+  const sigB64 = base64url(sig)
+  return `${data}.${sigB64}`
 }
 
 main().catch((e) => { console.error(e); process.exit(1) })

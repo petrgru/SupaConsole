@@ -3,6 +3,7 @@ import * as path from 'path'
 import { exec } from 'child_process'
 import { promisify } from 'util'
 import { prisma } from './db'
+import crypto from 'crypto'
 
 const execAsync = promisify(exec)
 
@@ -16,17 +17,28 @@ function generateRandomString(length: number): string {
   return result
 }
 
-function generateJWT(role: 'anon' | 'service_role', timestamp: number): string {
-  // Generate a simple JWT-like token (for demo purposes)
-  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
-  const payload = Buffer.from(JSON.stringify({
+function base64url(input: Buffer | string): string {
+  const buf = Buffer.isBuffer(input) ? input : Buffer.from(input)
+  return buf.toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+}
+
+function generateJWT(role: 'anon' | 'service_role', timestamp: number, secret: string): string {
+  // Proper HS256-signed JWT compatible with Supabase services
+  const header = { alg: 'HS256', typ: 'JWT' }
+  const payload = {
     role,
     iss: 'supabase',
+    aud: 'authenticated',
     iat: Math.floor(timestamp / 1000),
-    exp: Math.floor(timestamp / 1000) + (365 * 24 * 60 * 60) // 1 year
-  })).toString('base64url')
-  const signature = generateRandomString(43) // Mock signature
-  return `${header}.${payload}.${signature}`
+    exp: Math.floor(timestamp / 1000) + (365 * 24 * 60 * 60), // 1 year
+  }
+
+  const headerB64 = base64url(JSON.stringify(header))
+  const payloadB64 = base64url(JSON.stringify(payload))
+  const data = `${headerB64}.${payloadB64}`
+  const signature = crypto.createHmac('sha256', secret).update(data).digest()
+  const signatureB64 = base64url(signature)
+  return `${data}.${signatureB64}`
 }
 
 // Pre-flight checks for Docker deployment
@@ -235,16 +247,20 @@ export async function createProject(name: string, userId: string, description?: 
     
     // Generate unique default port values to prevent conflicts
     const basePort = 8000 + (timestamp % 10000) // Use last 4 digits of timestamp for uniqueness
+    // Generate JWT secret first, then sign keys using it
+    const jwtSecret = generateRandomString(64)
+    const hostUrl = process.env.HOST_URL || 'http://localhost'
     const defaultEnvVars = {
       // Secrets - generated random values
       POSTGRES_PASSWORD: generateRandomString(32),
-      JWT_SECRET: generateRandomString(64),
-      ANON_KEY: generateJWT('anon', timestamp),
-      SERVICE_ROLE_KEY: generateJWT('service_role', timestamp),
+      JWT_SECRET: jwtSecret,
+      ANON_KEY: generateJWT('anon', timestamp, jwtSecret),
+      SERVICE_ROLE_KEY: generateJWT('service_role', timestamp, jwtSecret),
       DASHBOARD_USERNAME: 'supabase',
       DASHBOARD_PASSWORD: generateRandomString(16),
       SECRET_KEY_BASE: generateRandomString(64),
       VAULT_ENC_KEY: generateRandomString(32),
+      PG_META_CRYPTO_KEY: generateRandomString(32),
       
       // Unique ports to prevent conflicts between projects
       POSTGRES_PORT: (basePort + 2000).toString(),
@@ -263,11 +279,11 @@ export async function createProject(name: string, userId: string, description?: 
       POOLER_TENANT_ID: `project-${timestamp}`,
       POOLER_DB_POOL_SIZE: '5',
       PGRST_DB_SCHEMAS: 'public,storage,graphql_public',
-      SITE_URL: `http://localhost:${basePort}`,
+  SITE_URL: `${hostUrl}:${basePort}`,
       ADDITIONAL_REDIRECT_URLS: '',
       JWT_EXPIRY: '3600',
       DISABLE_SIGNUP: 'false',
-      API_EXTERNAL_URL: `http://localhost:${basePort}`,
+  API_EXTERNAL_URL: `${hostUrl}:${basePort}`,
       MAILER_URLPATHS_CONFIRMATION: '/auth/v1/verify',
       MAILER_URLPATHS_INVITE: '/auth/v1/verify',
       MAILER_URLPATHS_RECOVERY: '/auth/v1/verify',
@@ -285,8 +301,8 @@ export async function createProject(name: string, userId: string, description?: 
       ENABLE_PHONE_AUTOCONFIRM: 'true',
       STUDIO_DEFAULT_ORGANIZATION: 'Default Organization',
       STUDIO_DEFAULT_PROJECT: 'Default Project',
-      STUDIO_PORT: (basePort + 100).toString(),
-      SUPABASE_PUBLIC_URL: `http://localhost:${basePort}`,
+  STUDIO_PORT: (basePort + 100).toString(),
+  SUPABASE_PUBLIC_URL: `${hostUrl}:${basePort}`,
       IMGPROXY_ENABLE_WEBP_DETECTION: 'true',
       OPENAI_API_KEY: '',
       FUNCTIONS_VERIFY_JWT: 'false',

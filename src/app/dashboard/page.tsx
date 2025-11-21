@@ -24,6 +24,8 @@ export default function DashboardPage() {
   const [error, setError] = useState('')
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
   const [projectUrls, setProjectUrls] = useState<Record<string, string>>({})
+  const [rotatingKeys, setRotatingKeys] = useState(false)
+  const [rotateMsg, setRotateMsg] = useState('')
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [systemMemory, setSystemMemory] = useState<{ total: number; used: number; usedPercent: number } | null>(null)
@@ -171,6 +173,40 @@ export default function DashboardPage() {
     setSelectedProject(null)
     setShowDeleteConfirm(false)
     setProjectUrls({})
+    setRotatingKeys(false)
+    setRotateMsg('')
+  }
+
+  const handleRotateKeysAndRestart = async () => {
+    if (!selectedProject) return
+    try {
+      setRotatingKeys(true)
+      setRotateMsg('Rotating JWT keys...')
+      const rotateRes = await fetch(`/api/projects/${selectedProject.id}/rotate-keys`, { method: 'POST' })
+      if (!rotateRes.ok) {
+        const data = await rotateRes.json().catch(() => ({}))
+        throw new Error(data.error || `Rotate keys failed (${rotateRes.status})`)
+      }
+
+      setRotateMsg('Restarting services...')
+      const restartRes = await fetch(`/api/projects/${selectedProject.id}/restart`, { method: 'POST' })
+      if (!restartRes.ok) {
+        const data = await restartRes.json().catch(() => ({}))
+        throw new Error(data.error || `Restart failed (${restartRes.status})`)
+      }
+
+      setRotateMsg('Done. Refreshing stats...')
+      // Refresh stats and URLs
+      await fetchProjectMemory(selectedProject.id)
+      await handleManageProject(selectedProject)
+      setRotateMsg('')
+      setRotatingKeys(false)
+    } catch (e: unknown) {
+      console.error('Rotate+Restart error:', e)
+      const msg = e instanceof Error ? e.message : 'Operation failed'
+      setRotateMsg(msg)
+      setRotatingKeys(false)
+    }
   }
 
   const fetchSystemMemory = async () => {
@@ -263,7 +299,6 @@ export default function DashboardPage() {
     fetchProjects()
     fetchRegistrationStatus()
     fetchHostUrl()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -290,8 +325,7 @@ export default function DashboardPage() {
       
       return () => clearInterval(interval)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-   }, [projects])
+  }, [projects])
 
   if (loading) {
     return (
@@ -605,6 +639,27 @@ export default function DashboardPage() {
               </div>
               
               <div className="grid grid-cols-2 gap-3">
+                <Button
+                  variant="default"
+                  onClick={handleRotateKeysAndRestart}
+                  className="col-span-2 flex items-center justify-center"
+                  disabled={rotatingKeys}
+                  title="Regenerates ANON/SERVICE keys and restarts Kong, Storage, Studio"
+                >
+                  {rotatingKeys ? (
+                    <span className="flex items-center gap-2">
+                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                      {rotateMsg || 'Working...'}
+                    </span>
+                  ) : (
+                    <span className="flex items-center">
+                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582M20.418 9A8.001 8.001 0 104.582 15M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                      </svg>
+                      Rotate Storage Keys & Restart
+                    </span>
+                  )}
+                </Button>
                 <Button
                   variant="outline"
                   onClick={() => router.push(`/dashboard/projects/${selectedProject.id}/configure`)}

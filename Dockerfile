@@ -22,17 +22,20 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     RUNNING_IN_DOCKER=true
 
-# Install Docker, Docker Compose, git, procps (for free command), and util-linux (for nsenter) in the runner stage
+# Install Docker CLI and Compose plugin from Debian repos, plus git, procps (for free), util-linux (for nsenter)
 RUN apt-get update && \
-    apt-get install -y curl ca-certificates gnupg git procps util-linux && \
-    install -m 0755 -d /etc/apt/keyrings && \
-    curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
-    chmod a+r /etc/apt/keyrings/docker.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
-    apt-get update && \
-    apt-get install -y docker-ce-cli docker-compose-plugin && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+        apt-get install -y \
+            curl \
+            ca-certificates \
+            git \
+            procps \
+            util-linux \
+            docker.io && \
+        mkdir -p /usr/lib/docker/cli-plugins && \
+        curl -sSL https://github.com/docker/compose/releases/download/v2.29.2/docker-compose-linux-x86_64 -o /usr/lib/docker/cli-plugins/docker-compose && \
+        chmod +x /usr/lib/docker/cli-plugins/docker-compose && \
+        apt-get clean && \
+        rm -rf /var/lib/apt/lists/*
 
 # Directorios persistentes
 RUN mkdir -p /app/data /app/supabase-core /app/supabase-projects
